@@ -42,15 +42,45 @@ function saveDiff() { try { localStorage.setItem('tail_diff', String(difficulty)
 
 // ================= AUDIO (all synthesized) =================
 let AC = null, master = null, musicGain = null, muted = false, noiseBuf = null;
+// --- iPhone/iPad fix: play sound even with the silent switch on, and unlock on the first tap ---
+let silentEl = null;
+function silentWavURL() {
+  // half a second of silence as a tiny WAV, looped through an <audio> element
+  const n = 4000, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+  const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  w(36, 'data'); v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+function unlockMediaChannel() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  try {
+    if (!silentEl) { silentEl = document.createElement('audio'); silentEl.src = silentWavURL(); silentEl.loop = true; silentEl.setAttribute('playsinline', ''); silentEl.volume = 0.01; }
+    const pr = silentEl.play(); if (pr && pr.catch) pr.catch(() => {});
+  } catch (e) {}
+}
 function initAudio() {
-  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  unlockMediaChannel();
+  if (AC) {
+    if (AC.state !== 'running') { const pr = AC.resume(); if (pr && pr.catch) pr.catch(() => {}); }
+    return;
+  }
   try {
     AC = new (window.AudioContext || window.webkitAudioContext)();
     master = AC.createGain(); master.gain.value = 0.5; master.connect(AC.destination);
     musicGain = AC.createGain(); musicGain.gain.value = 0.16; musicGain.connect(master);
+    // play one silent sample inside the tap so Safari fully unlocks the audio
+    const b = AC.createBuffer(1, 1, 22050), src = AC.createBufferSource(); src.buffer = b; src.connect(AC.destination); src.start(0);
+    if (AC.state !== 'running') { const pr = AC.resume(); if (pr && pr.catch) pr.catch(() => {}); }
     startMusic();
   } catch (e) { AC = null; }
 }
+// every kind of first interaction can unlock sound (Safari only trusts some of them)
+['touchend', 'click', 'keydown', 'mousedown'].forEach(ev => addEventListener(ev, () => initAudio(), { passive: true }));
+document.addEventListener('visibilitychange', () => { if (!document.hidden && AC && AC.state !== 'running') AC.resume().catch(() => {}); });
 function tone(f, d, type = 'square', v = 0.2, f2 = null, delay = 0) {
   if (!AC || muted) return;
   const t = AC.currentTime + delay, o = AC.createOscillator(), g = AC.createGain();
